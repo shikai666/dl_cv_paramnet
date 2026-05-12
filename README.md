@@ -1,348 +1,392 @@
- # DL-CV ParamNet
+# DL-CV ParamNet
 
-## 基于自监督对比学习的深度学习控制CV参数化架构
+## Self-Supervised Parameterization of Classical CV for Jiandu Manuscript Mask Extraction
 
-**DL-CV ParamNet: A Contrastive Self-Supervised Framework for Deep Learning-Controlled CV Parameterization in Liye Qin Bamboo Slips Text Segmentation**
+**DL-CV ParamNet: An Interpretable Hybrid Framework for Foreground-Mask Extraction on Jiandu Bamboo-Slip Manuscripts via Self-Supervised Learning of Classical-CV Control Parameters**
 
----
-
-## 项目概述
-
-针对里耶秦简灰度图像（从PDF扫描文档提取，无纹理干扰）的文字轮廓检测任务，DL-CV ParamNet 是一个无监督混合架构。该架构通过深度学习（DL）模型自适应优化计算机视觉（CV）操作的参数，实现端到端学习，而无需像素级标注。
-
-### 核心创新
-
-1. **DL 控制 CV 参数**：深度学习网络预测 CV 操作的最优参数，而非直接预测分割结果
-2. **自监督学习**：对比学习 + 重建损失，无需像素级标注
-3. **端到端可微**：所有 CV 操作使用可微近似，支持梯度回传
+> 论文配套代码与数据。Paper: see `paper/DL_CV_ParamNet_revised.pdf` (or the arXiv link, once available).
 
 ---
 
-## 数学框架
+## 项目概述 / Overview
 
-### 整体架构
+DL-CV ParamNet 是一个**可解释的混合框架**，用于在标注稀缺的历史简牍 (Jiandu) 文档上提取前景文字 mask。与传统的端到端深度分割网络不同，本方法**只让深度学习预测三个可解释的经典 CV 参数**——Canny 双阈值 $(t_l, t_h)$ 和形态学闭运算的核大小 $k_m$——而轮廓生成 (Canny + Closing) 与最终 mask 构造 (overlap-based foreground selection) 全程保持经典、确定、可诊断。
 
-输入灰度图像 $I \in [0, 255]^{H \times W \times 1}$，架构包括四个模块：
+主战场是公开的 **DeepJiandu** 数据集（5,922 张训练图、100 张手工 mask 标注的评估子集）。模型在此完全自监督训练，不使用任何像素级、字符级或边界级标注。此外提供一个**里耶秦简零样本泛化分析**作为跨简牍源的迁移验证。
 
-```
-I → [特征提取器 f_θ] → F' → [参数预测器 g_φ] → P → [CV执行模块 h] → C
-                                    ↑                         ↓
-                            [自监督训练模块] ←←←←←←←←←←←←←←←←←←←
-```
+### 核心定位 / Positioning
 
-### 1. 特征提取器
+1. **DL 控制 CV 参数，不预测像素**：网络只学一个三维控制向量 $(t_l, t_h, k_m)$，避免在无像素标注下学习高维 dense mask；
+2. **完全无监督训练**：NT-Xent 对比一致性 + Sobel 伪边重建，两项自监督目标合作，无需任何标签；
+3. **评估期确定性**：从 contour cue 到 final mask 全部经典几何规则，每一次失败都能定位到具体 stage (thresholding / closing / overlap filtering / mask-to-box)。
 
-$$f_{\theta}: \mathbb{R}^{H \times W \times 1} \to \mathbb{R}^{D}$$
+---
 
-- 预处理：直方图均衡化 $\text{HistEq}(I)_{i,j} = 255 \cdot \sum_{k=0}^{I_{i,j}} p(k)$
-- 骨干网络：ResNet-18（修改首层为单通道输入）
-- 通道注意力：$F' = F \odot \sigma( W_a \cdot \text{GAP}(F) + b_a )$
+## 数学框架 / Mathematical Framework
 
-### 2. 参数预测器
+输入灰度图像 $x \in \mathbb{R}^{H \times W}$，先用 CLAHE 进行对比度增强 $x' = \mathrm{CLAHE}(x)$，再进入下列流水线。
 
-$$g_{\phi}: \mathbb{R}^{D} \to \mathbb{R}^{K}$$
+### 1. 参数预测网络 (Parameter Prediction Network)
 
-MLP 预测并映射到物理范围：
+对增强图 $x'$ 的两个增强视图 $x_1, x_2$，共享权重的 ResNet-18 + SE channel attention 提取全局特征：
 
-- 低阈值：$t_l = \alpha_l \cdot \sigma(p_1) + \beta_l$，其中 $\alpha_l=100, \beta_l=0 \Rightarrow t_l \in [0,100]$
-- 高阈值：$t_h = \alpha_h \cdot \sigma(p_2) + \beta_h + t_l$，其中 $\alpha_h=100, \beta_h=50 \Rightarrow t_h > t_l$
-- 内核大小：$k_m = \lfloor \alpha_k \cdot \sigma(p_3) + \beta_k \rceil$，其中 $\alpha_k=10, \beta_k=3 \Rightarrow k_m \in [3,13]$
+$$F_i' = F_i \odot \sigma(W_a \cdot \mathrm{GAP}(F_i) + b_a), \quad F_i = f_\Theta(x_i)$$
 
-### 3. CV 执行模块
+MLP 头 $g_\Phi$ 输出三维 raw $p_i = [p_{1,i}, p_{2,i}, p_{3,i}]$，经有界映射约束到合法 CV 参数范围：
 
-$$h(P, I) = \text{FindContours}( \text{Closing}( \text{Canny}(I, t_l, t_h), k_m ) )$$
+$$t_{l,i} = 100\,\sigma(p_{1,i}), \quad t_{l,i} \in [0, 100]$$
 
-- Canny 边缘检测：$G = \sqrt{ (\nabla_x I)^2 + (\nabla_y I)^2 }$
-- 闭运算：$\text{Closing}(E, k_m) = \text{Erode}( \text{Dilate}(E, K_{k_m}), K_{k_m} )$
+$$t_{h,i} = t_{l,i} + (200 - t_{l,i})\,\sigma(p_{2,i}), \quad t_{h,i} \in [t_{l,i}, 200]$$
 
-### 4. 自监督训练
+$$k_{m,i} = 10\,\sigma(p_{3,i}) + 3, \quad k_{m,i} \in [3, 13]$$
 
-**对比损失 (修改版 NT-Xent)**:
+评估期 $k_m$ 离散化到最近的奇数 $\{3, 5, 7, 9, 11, 13\}$。
 
-$$\mathcal{L}_{cont} = \frac{1}{B} \sum_{b=1}^{B} -\log \frac{ \exp( \text{sim}(z_b^{+}, z_b^{++}) / \tau ) }{ \sum_{k=1, k \neq b}^{B} \left[ \exp( \text{sim}(z_b^{+}, z_k^{-}) / \tau ) + \exp( \text{sim}(z_b^{++}, z_k^{+}) / \tau ) \right] }$$
+### 2. 经典 CV 执行模块 (Classical CV Execution)
 
-其中：
-- $z = \text{Proj}(\text{Flatten}(C))$，投影函数为两层 MLP
-- $\text{Proj}(x) = W_p^{(2)} \rho( W_p^{(1)} x + b_p^{(1)} ) + b_p^{(2)}$
-- $\rho$ 为 ReLU 激活函数，$x = \text{Flatten}(C) \in \mathbb{R}^{H \times W}$
-- $\text{sim}(u, v) = \frac{u^\top v}{\|u\|_2 \|v\|_2}$ 为余弦相似度
-- $\tau = 0.1$ 为温度参数
-- $z^+, z^{++}$ 为同一图像的两个增强视图
+$$E_i = \mathrm{Canny}(x_i; t_{l,i}, t_{h,i})$$
 
-**重建损失**:
-$$\mathcal{L}_{rec} = \| C - S(I) \|_1 + \gamma \| \nabla C - \nabla I \|_2^2$$
+$$M_{c,i} = \mathrm{Closing}(E_i; k_{m,i}) = \mathrm{Erode}(\mathrm{Dilate}(E_i, K_{k_{m,i}}), K_{k_{m,i}})$$
+
+得到中间二值 contour cue $M_{c,i} \in \{0, 1\}^{H \times W}$。
+
+### 3. 确定性 Overlap-Mask 生成 (Deterministic Overlap-Mask Generation, $\mathcal{G}$)
+
+**仅在评估期对单视图使用**，将 contour cue $M_c$ 转为最终 mask $M_o$：
+
+- **Loose ink candidates**: 对原图 $x$ 做 inverse Otsu 二值化得 $I$，连通域分析得 $\{C_j\}_{j=1}^N$；
+- **Contour support band**: $B = \mathrm{Dilate}(M_c; K^{\text{ellipse}}_{3 \times 3})$；
+- **Component-level overlap filtering**: 对每个 $C_j$ 计算 $o_j = |C_j \cap B|$, $r_j = o_j / |C_j|$，保留满足 $|C_j| \ge A_{\min}$ 且 $(o_j \ge P_{\min} \text{ or } r_j \ge R_{\min})$ 的连通域；
+- **Final mask**: $M_o = \bigcup_{j \in \mathcal{K}} (C_j \cap B)$。
+
+默认参数 $A_{\min}=8, P_{\min}=5, R_{\min}=0.03$。该模块**不含任何可学习参数**，可完全复现。
+
+### 4. 自监督训练目标 (Self-Supervised Objective)
+
+**NT-Xent 对比一致性损失** (over a mini-batch of $B$ images, $2B$ augmented samples):
+
+$$\ell_{i,j} = -\log \frac{\exp(\mathrm{sim}(z_i, z_j) / \tau)}{\sum_{k=1}^{2B} \mathbf{1}_{[k \ne i]} \exp(\mathrm{sim}(z_i, z_k) / \tau)}$$
+
+$$\mathcal{L}_\mathrm{con} = \frac{1}{2B} \sum_{i=1}^{B} (\ell_{2i-1, 2i} + \ell_{2i, 2i-1})$$
+
+**View-aligned Sobel 伪边重建损失** (对 $M_{c,1}, M_{c,2}$ 各一次):
+
+$$e = \mathbf{1}\big[\sqrt{(\nabla_x x')^2 + (\nabla_y x')^2} > \delta\big], \quad e_i = v_i(e)$$
+
+$$\mathcal{L}_\mathrm{pix} = \frac{1}{2}\sum_{i=1}^{2}\|M_{c,i} - e_i\|_1$$
+
+$$\mathcal{L}_\mathrm{grad} = \frac{1}{2}\sum_{i=1}^{2}\big(\|\nabla_x M_{c,i} - \nabla_x x_i\|_2^2 + \|\nabla_y M_{c,i} - \nabla_y x_i\|_2^2\big)$$
+
+$$\mathcal{L}_\mathrm{rec} = \mathcal{L}_\mathrm{pix} + \gamma\,\mathcal{L}_\mathrm{grad}$$
 
 **总损失**:
-$$\mathcal{L} = \lambda_1 \mathcal{L}_{cont} + \lambda_2 \mathcal{L}_{rec}$$
 
-默认超参数：$\tau=0.1, \gamma=0.5, \lambda_1=1.0, \lambda_2=0.8$
+$$\mathcal{L} = \lambda_1 \mathcal{L}_\mathrm{con} + \lambda_2 \mathcal{L}_\mathrm{rec}$$
+
+默认超参数: $\tau = 0.1, \gamma = 0.5, \lambda_1 = 1.0, \lambda_2 = 0.8, \delta = 0.2$。
 
 ---
 
-## 项目结构
+## 项目结构 / Repository Layout
 
 ```
 dl_cv_paramnet/
-├── README.md                     # 项目文档
+├── README.md                     # 项目文档（本文件）
 ├── requirements.txt              # 依赖列表
-├── run.py                        # 主入口脚本
+├── LICENSE                       # MIT License
 │
-├── configs/                      # 配置文件目录
-│   └── default.json              # 默认配置
+├── configs/                      # 配置文件
+│   └── default.json
 │
-├── data/                         # 数据集目录
-│   ├── README.md                 # 数据集说明
-│   ├── raw/                      # 原始数据（PDF、未处理图像）
-│   └── processed/                # 处理后的数据集
-│       ├── train/images/         # 训练集
-│       ├── val/images/           # 验证集
-│       └── test/images/          # 测试集
+├── data/                         # 数据
+│   ├── README.md                 # 数据准备说明
+│   ├── deepjiandu/               # DeepJiandu 数据集挂载点（需自行下载，见下文）
+│   ├── eval_subset_100/          # 100-image 评估子集
+│   │   ├── image_ids.txt         # 子集图像 ID 列表（与论文 §4.1 对应）
+│   │   ├── seed.txt              # 随机采样使用的 seed
+│   │   └── ground_truth/         # 手工 mask GT（解压自 ground_truth.zip）
+│   └── liye_qin/                 # 里耶秦简零样本迁移子集（20 张，见论文 §4.7.4）
 │
 ├── src/                          # 源代码
-│   ├── __init__.py
-│   ├── config.py                 # 配置管理
-│   ├── losses.py                 # 损失函数
-│   ├── data.py                   # 数据加载
-│   ├── metrics.py                # 评估指标
-│   └── models/                   # 模型模块
-│       ├── __init__.py
-│       ├── feature_extractor.py  # 特征提取器
-│       ├── parameter_predictor.py # 参数预测器
-│       ├── cv_execution.py       # CV执行模块
-│       └── model.py              # 完整模型
+│   ├── config.py
+│   ├── losses.py
+│   ├── data.py
+│   ├── metrics.py                # BF-Score / IoU / Dice / MCC / Contour Recall
+│   └── models/
+│       ├── feature_extractor.py
+│       ├── parameter_predictor.py
+│       ├── cv_execution.py       # Canny + Closing
+│       ├── overlap_mask.py       # 确定性 overlap-mask 生成 G
+│       └── model.py
 │
-├── scripts/                      # 脚本目录
-│   ├── train.py                  # 训练脚本
-│   ├── evaluate.py               # 评估脚本
-│   ├── inference.py              # 推理脚本
-│   ├── visualization.py          # 可视化工具
-│   ├── ablation.py               # 消融实验
-│   ├── prepare_data.py           # 数据准备
-│   └── test_all.py               # 测试脚本
+├── scripts/                      # 训练 / 评估 / 推理 脚本
+│   ├── train.py
+│   ├── evaluate.py
+│   ├── inference.py
+│   ├── ablation.py
+│   ├── sensitivity.py            # 论文 §4.5.3 敏感性分析
+│   ├── liye_transfer.py          # 论文 §4.7.4 零样本迁移
+│   └── visualization.py
 │
-├── checkpoints/                  # 模型检查点
-├── logs/                         # 训练日志
-├── outputs/                      # 输出结果
-└── experiments/                  # 实验结果
-    ├── ablation/                 # 消融实验
-    └── sensitivity/              # 敏感性分析
+└── checkpoints/                  # 预训练权重存放目录
 ```
 
 ---
 
-## 安装
+## 安装 / Installation
 
 ### 环境要求
 
-- Python >= 3.8
-- PyTorch >= 1.10
-- CUDA >= 11.0 (推荐)
+- Python ≥ 3.8
+- PyTorch ≥ 1.10 (with CUDA ≥ 11.0 recommended)
+- OpenCV ≥ 4.5
 
-### 安装依赖
+### 依赖安装
 
 ```bash
-pip install torch torchvision numpy opencv-python matplotlib tqdm scipy
-pip install pdf2image  # 可选，用于从 PDF 提取图像
+pip install -r requirements.txt
+```
+
+或者最小集合：
+
+```bash
+pip install torch torchvision numpy opencv-python matplotlib tqdm scipy scikit-image
 ```
 
 ---
 
-## 使用方法
+## 数据准备 / Data Preparation
 
-### 1. 数据准备
+### DeepJiandu 主数据集
 
-```bash
-# 从 PDF 提取图像
-python prepare_data.py extract --pdf document.pdf --output ./extracted
+本方法使用公开的 **DeepJiandu** 数据集 (Liu et al., *Scientific Data*, 2025)。请从其官方页面下载并按以下结构放置：
 
-# 预处理和划分数据集
-python prepare_data.py prepare --input ./images --output ./dataset
-
-# 创建合成数据集（测试用）
-python prepare_data.py synthetic --output ./synthetic_data --num_samples 500
-
-# 分析数据集统计信息
-python prepare_data.py analyze --data_dir ./dataset
+```
+data/deepjiandu/
+├── train/      # 5,922 张训练图
+├── val/        # 751 张验证图
+└── test/       # 743 张测试图
 ```
 
-### 2. 训练
+本项目**不使用** DeepJiandu 的字符级或像素级标签训练 ParamNet，仅使用图像本身做自监督训练。
+
+### 100-image 评估子集
+
+论文 §4.1 中用于跨方法 mask 评估的 100 张图像子集 + 手工 ground-truth mask 提供在：
+
+```
+data/eval_subset_100/
+├── image_ids.txt        # 从 DeepJiandu test split 随机采样的 image IDs
+├── seed.txt             # 复现随机采样使用的 seed
+└── ground_truth.zip     # 100 张二值 GT mask（PNG 格式 + JSON 元数据）
+```
+
+**解压使用**：
 
 ```bash
-# 使用合成数据快速测试
-python train.py --synthetic --epochs 10 --batch_size 16
+cd data/eval_subset_100
+unzip ground_truth.zip -d ground_truth/
+```
 
-# 使用真实数据训练
-python train.py --data_dir ./dataset --epochs 100 --device cuda
+### 里耶秦简零样本迁移子集
 
-# 恢复训练
-python train.py --resume checkpoints/dl_cv_paramnet/best.pth
+论文 §4.7.4 中用于零样本泛化分析的 20 张里耶秦简放在：
+
+```
+data/liye_qin/
+└── images/        # 20 张零样本测试图
+```
+
+注：该子集**仅用于零样本定性分析**，不含像素级 ground truth；论文中 99/121 的检测比是手工目测验证而非像素级指标。
+
+---
+
+## 使用方法 / Usage
+
+下列命令均假定在 repo 根目录运行。
+
+### 1. 训练 / Training
+
+```bash
+# 标准训练（论文默认设置：100 epochs, batch=128, lr=1e-4）
+python scripts/train.py \
+    --data_dir data/deepjiandu \
+    --epochs 100 \
+    --batch_size 128 \
+    --lr 1e-4 \
+    --device cuda
+
+# 从断点恢复
+python scripts/train.py --resume checkpoints/dl_cv_paramnet/best.pth
 
 # 自定义配置
-python train.py --config config.json --epochs 200 --lr 5e-5
+python scripts/train.py --config configs/default.json
 ```
 
-### 3. 推理
+### 2. 评估 / Evaluation
+
+在 100-image 评估子集上复现论文 Table 3：
 
 ```bash
-# 单图像推理
-python inference.py --checkpoint model.pth --input image.png --output result.png
-
-# 批量处理
-python inference.py --checkpoint model.pth --input_dir images/ --output_dir results/
-
-# 生成叠加可视化
-python inference.py --checkpoint model.pth --input image.png --overlay
-
-# 导出轮廓到 JSON
-python inference.py --checkpoint model.pth --input image.png --export_json
+python scripts/evaluate.py \
+    --checkpoint checkpoints/dl_cv_paramnet/best.pth \
+    --eval_subset data/eval_subset_100 \
+    --metrics bf_score iou dice mcc contour_recall \
+    --output outputs/main_results.json
 ```
 
-### 4. 评估
+### 3. 消融实验 / Ablation Study
 
 ```bash
-# 使用合成数据评估
-python evaluate.py --checkpoint model.pth --synthetic
-
-# 使用测试集评估
-python evaluate.py --checkpoint model.pth --data_dir ./dataset --has_gt
-
-# 与基线方法比较
-python evaluate.py --checkpoint model.pth --data_dir ./dataset
+# 复现论文 §4.5.1 消融（5 种配置）
+python scripts/ablation.py --output_dir experiments/ablation
 ```
 
-### 5. 消融实验
+### 4. 敏感性分析 / Sensitivity Analysis
 
 ```bash
-# 运行所有组件消融
-python ablation.py --output_dir ./ablation_results --epochs 50
-
-# 使用合成数据快速测试
-python ablation.py --synthetic --epochs 10
-
-# 仅超参数敏感性分析
-python ablation.py --mode sensitivity --epochs 30
+# 复现论文 §4.5.3 (Tables 6 & 7)
+python scripts/sensitivity.py --output_dir experiments/sensitivity
 ```
 
-### 6. 可视化
+### 5. 里耶秦简零样本迁移 / Liye Qin Zero-Shot
 
 ```bash
-# 单图像可视化
-python visualization.py --mode single --input image.png --contour contour.png --output viz.png
+# 复现论文 §4.7.4 Fig. 11
+python scripts/liye_transfer.py \
+    --checkpoint checkpoints/dl_cv_paramnet/best.pth \
+    --input_dir data/liye_qin/images \
+    --output_dir outputs/liye_transfer
+```
 
-# 参数分布可视化
-python visualization.py --mode params --params_file predicted_params.json --output ./visualizations
+### 6. 推理 / Inference
+
+```bash
+# 单图像
+python scripts/inference.py \
+    --checkpoint checkpoints/dl_cv_paramnet/best.pth \
+    --input image.png \
+    --output result_mask.png \
+    --overlay  # 同时输出叠加可视化
+
+# 批量
+python scripts/inference.py \
+    --checkpoint checkpoints/dl_cv_paramnet/best.pth \
+    --input_dir images/ \
+    --output_dir results/
 ```
 
 ---
 
-## 评价指标
+## 评价指标 / Evaluation Metrics
 
-### 定量指标
+论文采用 5 个互补指标，所有指标均在 $M_o$ (final overlap mask) 上计算：
 
-| 指标 | 定义 | 说明 |
+| 指标 | 定义 | 角色 |
 |------|------|------|
-| **BF-Score** | $F1 = 2 \cdot \frac{P \cdot R}{P + R}$ | 边界匹配精度，容差 δ=2 像素 |
-| **IoU** | $\frac{\|C \cap G\|}{\|C \cup G\|}$ | 区域重叠程度 |
-| **Dice** | $\frac{2 \cdot \|C \cap G\|}{\|C\| + \|G\|}$ | 对小目标敏感 |
-| **重建误差** | $\|C - S(I)\|_1 + \gamma \|\nabla C - \nabla I\|_2^2$ | 无监督代理指标 |
+| **BF-Score** | $F_1 = \frac{2 P_b R_b}{P_b + R_b}$, with 2-pixel tolerance | Primary (边界匹配) |
+| **IoU** | $\|M_p \cap M_g\| / \|M_p \cup M_g\|$ | Primary (区域重叠) |
+| **Dice** | $2\|M_p \cap M_g\| / (\|M_p\| + \|M_g\|)$ | Primary (对小目标敏感) |
+| **MCC** | $\frac{TP \cdot TN - FP \cdot FN}{\sqrt{(TP+FP)(TP+FN)(TN+FP)(TN+FN)}}$ | Auxiliary (前后景平衡) |
+| **Contour Recall** | $\|\partial M_g \cap N_\epsilon(\partial M_p)\| / \|\partial M_g\|$ | Auxiliary (边界覆盖) |
 
-### 消融实验设计
-
-| 配置 | 描述 |
-|------|------|
-| Full Model | 完整模型（基准） |
-| w/o $\mathcal{L}_{cont}$ | 移除对比损失 |
-| w/o $\mathcal{L}_{rec}$ | 移除重建损失 |
-| Fixed CV Params | 固定 CV 参数（不使用 DL 预测） |
-| w/o Attention | 禁用注意力机制 |
+字符级辅助分析使用中心匹配协议下的 macro/micro detection rate + center-based precision + F1 (论文 §4.6, Table 8)。
 
 ---
 
-## 配置说明
+## 数据增强 / Data Augmentation
 
-### 模型配置 (ModelConfig)
+匹配灰度简牍扫描的真实变化，**仅使用几何与轻量光度扰动**，不引入噪声型增强：
+
+- 随机旋转 $[-15^\circ, +15^\circ]$
+- 随机缩放 $[0.9, 1.1]$
+- 亮度/对比度抖动 $\pm 0.2$
+
+不使用翻转（竹简文本是有方向语义的）。详见论文 §3.9。
+
+---
+
+## 配置 / Configuration
+
+### Model Config
 
 ```python
 @dataclass
 class ModelConfig:
-    feature_dim: int = 512      # 特征维度 D
-    predictor_hidden_dim: int = 256  # MLP 隐藏层维度
-    
-    # 参数映射超参数
-    alpha_l: float = 100.0      # t_l 缩放
-    beta_l: float = 0.0         # t_l 偏移
-    alpha_h: float = 100.0      # t_h 缩放
-    beta_h: float = 50.0        # t_h 偏移（保证 t_h > t_l）
-    alpha_k: float = 10.0       # k_m 缩放
-    beta_k: float = 3.0         # k_m 偏移
+    feature_dim: int = 512
+    predictor_hidden_dim: int = 256
+
+    # 参数映射（与论文 §3.3 一致）
+    # t_l = 100 * σ(p1)               -> [0, 100]
+    # t_h = t_l + (200 - t_l) * σ(p2) -> [t_l, 200]
+    # k_m = 10 * σ(p3) + 3            -> [3, 13]
+    se_reduction: int = 16          # SE channel attention reduction ratio
+    projection_dim: int = 128       # contrastive projection head output dim
 ```
 
-### 训练配置 (TrainingConfig)
+### Training Config
 
 ```python
 @dataclass
 class TrainingConfig:
     epochs: int = 100
-    batch_size: int = 32
+    batch_size: int = 128
     learning_rate: float = 1e-4
-    
-    # 损失权重
-    lambda_contrastive: float = 1.0   # λ_1
-    lambda_reconstruction: float = 0.8 # λ_2
-    temperature: float = 0.1           # τ
-    gamma: float = 0.5                 # γ (梯度损失权重)
+    weight_decay: float = 1e-4
+    lr_schedule: str = "cosine"
+
+    # 损失权重（论文默认）
+    lambda_contrastive: float = 1.0  # λ_1
+    lambda_reconstruction: float = 0.8  # λ_2
+    temperature: float = 0.1            # τ
+    gamma: float = 0.5                  # γ
+    sobel_threshold: float = 0.2        # δ
 ```
 
 ---
 
-## 技术细节
+## 差分化技术细节 / Differentiable Approximations
 
-### 可微 CV 操作
+为使梯度能从自监督目标回流到 $(t_l, t_h, k_m)$，训练期用如下软近似（评估期则使用标准 OpenCV 实现）：
 
-为实现端到端训练，所有 CV 操作使用可微近似：
+**Canny 软阈值** (sigmoid-based)：
 
-1. **软阈值**：用 sigmoid 替代硬阈值
-   $$\text{soft\_threshold}(x, t) = \sigma(k \cdot (x - t))$$
+$$\widetilde{g} = \frac{g - t_l}{\max(t_h - t_l, \Delta)}, \quad \widetilde{E} = \sigma\big((g - t_l) / T\big) \cdot \sigma\big((\widetilde{g} - 0.3)\,T\big)$$
 
-2. **软 NMS**：用 softmax 近似非极大抑制
-   
-3. **形态学操作**：
-   - 软膨胀：$\text{soft\_dilate}(x) = \text{softmax}(x \cdot T) \cdot x$
-   - 软腐蚀：$\text{soft\_erode}(x) = \text{softmax}(-x \cdot T) \cdot x$
+**Soft NMS**: 用 $3 \times 3$ max-pool 近似比较。
 
-4. **STE (Straight-Through Estimator)**：前向用离散值，反向传播用连续梯度
+**Morphological closing soft surrogate** (softmax-weighted mixture over six kernels):
 
-### 数据增强策略
+$$\widetilde{M}_c = \sum_{k \in \{3,5,7,9,11,13\}} w_k(k_m) M_c^{(k)}, \quad w_k(k_m) = \mathrm{softmax}_k\!\big(-|k_m - k|/\tau_m\big)$$
 
-仅使用几何变换（匹配干净灰度图特性，避免噪声增强）：
+**STE side path**: $k_m$ 经 straight-through estimator 圆到最近奇数，**仅用于训练期诊断和评估期硬执行**，梯度路径完全由 softmax mixture 承担。
 
-- 旋转：$[-15°, +15°]$
-- 缩放：$[0.8, 1.2]$
-- 水平/垂直翻转
+详见论文 §3.9 和 Algorithm 1。
 
 ---
 
-## 引用
-
-如果本项目对您的研究有帮助，请考虑引用：
+## 引用 / Citation
 
 ```bibtex
-@article{dlcvparamnet2024,
-  title={DL-CV ParamNet: A Contrastive Self-Supervised Framework for Deep Learning-Controlled CV Parameterization in Liye Qin Bamboo Slips Text Segmentation},
-  author={...},
-  journal={...},
-  year={2024}
+@article{jishou2026paramnet,
+  title  = {DL-CV ParamNet: Self-Supervised Parameterization of Classical CV for Jiandu Manuscript Mask Extraction},
+  author = {Shikai Jishou},
+  year   = {2026},
+  note   = {Preprint},
+  url    = {https://github.com/shikai666/dl_cv_paramnet}
 }
 ```
 
----
-
-## 许可证
-
-MIT License
+> Replace with the venue/DOI once the paper is accepted.
 
 ---
 
-## 联系方式
+## 许可证 / License
 
-如有问题或建议，请提交 Issue 或联系作者。
+本仓库代码遵循 **MIT License**。所使用的 DeepJiandu 数据集请参阅其原始 license。
+
+---
+
+## 联系 / Contact
+
+如有问题或建议，请在 GitHub 上提交 [Issue](https://github.com/shikai666/dl_cv_paramnet/issues)。
