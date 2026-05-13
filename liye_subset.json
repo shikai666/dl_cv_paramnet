@@ -1,0 +1,142 @@
+{
+  "description": "Curated zero-shot probe subset of Liye Qin bamboo-slip manuscripts used in Sec. 4.7.3 of the paper. Each entry corresponds to one bamboo-slip scan. M is the total number of visible ground-truth characters; K is the number of those characters covered by at least one predicted character box from DL-CV ParamNet under the protocol of Sec. 4.6. K and M are reproduced here so that an independent reader can verify the 99/121 aggregate without opening the character_coverage_liye.xlsx sheet.",
+  "aggregate": {
+    "num_slips": 20,
+    "visible_characters_M": 121,
+    "covered_K": 99,
+    "coverage_K_over_M": 0.8181818181818182,
+    "coverage_percent": 81.8
+  },
+  "selection_criteria": {
+    "applied_before_inspecting_any_model_output": true,
+    "criteria": [
+      "C1: the slip scan is visually complete, with no large physical break that removes a contiguous sequence of character positions.",
+      "C2: at least 3 characters are visible to the unaided eye, so that the per-slip coverage rate is not dominated by a single character.",
+      "C3: at least one of the substrate-degradation modes targeted by this probe is present: pronounced wood-grain texture, water staining, or thin / partly faded ink. This ensures the probe stresses the model under conditions absent or rare in the DeepJiandu test split."
+    ],
+    "explicitly_NOT_a_criterion": "Per-slip coverage rate of the predicted boxes. The selection looks only at the manuscript condition, never at the model's output, so the 20-slip aggregate of 81.8% is not biased toward slips on which the model already performs well."
+  },
+  "source_note": "Slip IDs follow the convention <page>_<slip-on-page> as used in the public Liye Qin scan repository. The exact source URLs are listed in the README.",
+  "slips": [
+    {
+      "slip_id": "p8_1",
+      "visible_characters_M": 9,
+      "covered_K": 8,
+      "coverage_rate": 0.8889
+    },
+    {
+      "slip_id": "p9_1",
+      "visible_characters_M": 4,
+      "covered_K": 4,
+      "coverage_rate": 1.0
+    },
+    {
+      "slip_id": "p9_2",
+      "visible_characters_M": 4,
+      "covered_K": 3,
+      "coverage_rate": 0.75
+    },
+    {
+      "slip_id": "p10_1",
+      "visible_characters_M": 11,
+      "covered_K": 8,
+      "coverage_rate": 0.7273
+    },
+    {
+      "slip_id": "p18_3",
+      "visible_characters_M": 5,
+      "covered_K": 5,
+      "coverage_rate": 1.0
+    },
+    {
+      "slip_id": "p22_7",
+      "visible_characters_M": 5,
+      "covered_K": 4,
+      "coverage_rate": 0.8
+    },
+    {
+      "slip_id": "p31_1",
+      "visible_characters_M": 7,
+      "covered_K": 6,
+      "coverage_rate": 0.8571
+    },
+    {
+      "slip_id": "p44_1",
+      "visible_characters_M": 3,
+      "covered_K": 3,
+      "coverage_rate": 1.0
+    },
+    {
+      "slip_id": "p49_2",
+      "visible_characters_M": 10,
+      "covered_K": 8,
+      "coverage_rate": 0.8
+    },
+    {
+      "slip_id": "p50_4",
+      "visible_characters_M": 14,
+      "covered_K": 11,
+      "coverage_rate": 0.7857
+    },
+    {
+      "slip_id": "p52_1",
+      "visible_characters_M": 6,
+      "covered_K": 5,
+      "coverage_rate": 0.8333
+    },
+    {
+      "slip_id": "p52_3",
+      "visible_characters_M": 4,
+      "covered_K": 3,
+      "coverage_rate": 0.75
+    },
+    {
+      "slip_id": "p53_1",
+      "visible_characters_M": 4,
+      "covered_K": 3,
+      "coverage_rate": 0.75
+    },
+    {
+      "slip_id": "p53_2",
+      "visible_characters_M": 5,
+      "covered_K": 5,
+      "coverage_rate": 1.0
+    },
+    {
+      "slip_id": "p54_1",
+      "visible_characters_M": 8,
+      "covered_K": 5,
+      "coverage_rate": 0.625
+    },
+    {
+      "slip_id": "p55_2",
+      "visible_characters_M": 8,
+      "covered_K": 8,
+      "coverage_rate": 1.0
+    },
+    {
+      "slip_id": "p60_1",
+      "visible_characters_M": 3,
+      "covered_K": 3,
+      "coverage_rate": 1.0
+    },
+    {
+      "slip_id": "p71_2",
+      "visible_characters_M": 2,
+      "covered_K": 2,
+      "coverage_rate": 1.0
+    },
+    {
+      "slip_id": "p78_8",
+      "visible_characters_M": 4,
+      "covered_K": 2,
+      "coverage_rate": 0.5
+    },
+    {
+      "slip_id": "p80_10",
+      "visible_characters_M": 5,
+      "covered_K": 3,
+      "coverage_rate": 0.6
+    }
+  ]
+}
